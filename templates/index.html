@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>STTtoLLM — Voice Chatbot</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2230; --border: #2a3340;
+    --text: #e6edf3; --muted: #8b949e; --accent: #4f8cff; --accent2: #2ea043;
+    --user: #1f2937; --assistant: #14304b; --warn: #d29922; --danger: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 14px 20px;
+    border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .pill {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
+    background: var(--panel2); border: 1px solid var(--border);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .pill.loading .dot { background: var(--warn); animation: pulse 1s infinite; }
+  .pill.idle .dot { background: var(--muted); }
+  .pill.listening .dot { background: var(--accent2); animation: pulse 1.1s infinite; }
+  .pill.transcribing .dot { background: var(--accent); animation: pulse .7s infinite; }
+  .pill.thinking .dot { background: var(--accent); animation: pulse .7s infinite; }
+  .pill.error .dot { background: var(--danger); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+  main { flex: 1; display: flex; min-height: 0; }
+
+  #chat { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
+  .empty { color: var(--muted); margin: auto; text-align: center; font-size: 14px; line-height: 1.6; }
+  .msg { max-width: 72%; padding: 11px 15px; border-radius: 14px; line-height: 1.5; font-size: 14.5px;
+         white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: var(--user); border-bottom-right-radius: 4px; }
+  .msg.assistant { align-self: flex-start; background: var(--assistant); border-bottom-left-radius: 4px; }
+  .msg .role { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 4px; }
+  .msg.user.lowconf { border: 1px solid var(--warn); }
+  .badge { display: inline-block; margin-left: 8px; font-size: 10px; font-weight: 700;
+           color: #1d1500; background: var(--warn); padding: 1px 6px; border-radius: 6px; vertical-align: middle; }
+
+  aside {
+    width: 290px; border-left: 1px solid var(--border); background: var(--panel);
+    padding: 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px;
+  }
+  aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); margin: 0 0 6px; }
+  .field { margin-bottom: 16px; }
+  .field label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 7px; }
+  .field label .val { color: var(--accent); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 5px; line-height: 1.4; }
+  .info { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-size: 12.5px; }
+  .info .row { display: flex; justify-content: space-between; padding: 3px 0; }
+  .info .row span:first-child { color: var(--muted); }
+  .info code { color: var(--text); }
+
+  .controls { display: flex; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--panel); }
+  button {
+    font: inherit; font-weight: 600; font-size: 14px; padding: 10px 20px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--panel2); color: var(--text); cursor: pointer;
+    transition: filter .12s, background .12s;
+  }
+  button:hover { filter: brightness(1.18); }
+  button:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+  button.primary { background: var(--accent2); border-color: transparent; }
+  button.warn { background: var(--warn); border-color: transparent; color: #1d1500; }
+  .spacer { flex: 1; }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>STTtoLLM</h1>
+      <div class="sub">mic → VAD → Whisper → LLM</div>
+    </div>
+    <div id="pill" class="pill loading"><span class="dot"></span><span id="pillText">Loading…</span></div>
+  </header>
+
+  <main>
+    <div id="chat">
+      <div class="empty" id="empty">
+        Press <b>Start</b> and speak — pause when you're done.<br>
+        Your transcript and the assistant's reply appear here.
+      </div>
+    </div>
+
+    <aside>
+      <div>
+        <h2>Settings (live)</h2>
+        <div class="field">
+          <label>VAD threshold <span class="val" id="vadVal">—</span></label>
+          <input type="range" id="vad" min="0.1" max="0.9" step="0.05" />
+          <div class="hint">Higher = needs louder/clearer speech to trigger (noisy room). Lower = picks up soft speech (quiet room).</div>
+        </div>
+        <div class="field">
+          <label>Trailing silence <span class="val" id="silVal">—</span></label>
+          <input type="range" id="sil" min="200" max="2000" step="50" />
+          <div class="hint">How long a pause ends your turn. Shorter = snappier but may cut you off; longer = laggier.</div>
+        </div>
+      </div>
+
+      <div>
+        <h2>Pipeline</h2>
+        <div class="info" id="info">
+          <div class="row"><span>Whisper model</span><code id="iModel">—</code></div>
+          <div class="row"><span>Device</span><code id="iDevice">—</code></div>
+          <div class="row"><span>Compute</span><code id="iCompute">—</code></div>
+          <div class="row"><span>LLM</span><code id="iLlm">—</code></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <div class="controls">
+    <button id="startBtn" class="primary" disabled>Start</button>
+    <button id="pauseBtn" class="warn" disabled style="display:none">Pause</button>
+    <div class="spacer"></div>
+    <button id="clearBtn">Clear conversation</button>
+  </div>
+
+<script>
+const chat = document.getElementById("chat");
+const empty = document.getElementById("empty");
+const pill = document.getElementById("pill");
+const pillText = document.getElementById("pillText");
+const startBtn = document.getElementById("startBtn");
+const pauseBtn = document.getElementById("pauseBtn");
+const clearBtn = document.getElementById("clearBtn");
+
+const STATUS_LABEL = {
+  loading: "Loading…", idle: "Paused", listening: "Listening…",
+  transcribing: "Transcribing…", thinking: "Thinking…", error: "Error",
+};
+
+let currentAssistant = null;  // the assistant bubble currently being streamed
+
+function setStatus(status) {
+  pill.className = "pill " + status;
+  pillText.textContent = STATUS_LABEL[status] || status;
+  const ready = status !== "loading" && status !== "error";
+  const paused = status === "idle";
+  startBtn.disabled = !ready;
+  pauseBtn.disabled = !ready;
+  startBtn.style.display = (ready && !paused) ? "none" : "";
+  pauseBtn.style.display = (ready && !paused) ? "" : "none";
+}
+
+function hideEmpty() { if (empty) empty.style.display = "none"; }
+
+function addUser(text, confident) {
+  hideEmpty();
+  const div = document.createElement("div");
+  div.className = "msg user" + (confident ? "" : " lowconf");
+  div.innerHTML = `<div class="role">You${confident ? "" : '<span class="badge">low confidence</span>'}</div>`;
+  div.appendChild(document.createTextNode(text));
+  chat.appendChild(div);
+  scroll();
+}
+
+function startAssistant() {
+  hideEmpty();
+  currentAssistant = document.createElement("div");
+  currentAssistant.className = "msg assistant";
+  currentAssistant.innerHTML = `<div class="role">Assistant</div>`;
+  currentAssistant.appendChild(document.createElement("span"));
+  chat.appendChild(currentAssistant);
+  scroll();
+}
+
+function appendAssistant(text) {
+  if (!currentAssistant) startAssistant();
+  const span = currentAssistant.querySelector("span");
+  span.textContent += (span.textContent ? " " : "") + text;
+  scroll();
+}
+
+function addAssistantFull(text) {  // used during snapshot replay
+  hideEmpty();
+  const div = document.createElement("div");
+  div.className = "msg assistant";
+  div.innerHTML = `<div class="role">Assistant</div>`;
+  const span = document.createElement("span");
+  span.textContent = text;
+  div.appendChild(span);
+  chat.appendChild(div);
+}
+
+function scroll() { chat.scrollTop = chat.scrollHeight; }
+
+function clearChat() {
+  [...chat.querySelectorAll(".msg")].forEach(n => n.remove());
+  currentAssistant = null;
+  if (empty) empty.style.display = "";
+}
+
+// ---- SSE stream ----
+const es = new EventSource("/events");
+es.onmessage = (e) => {
+  const ev = JSON.parse(e.data);
+  switch (ev.type) {
+    case "snapshot":
+      clearChat();
+      ev.transcript.forEach(m => {
+        if (m.role === "user") addUser(m.text, m.confident !== false);
+        else addAssistantFull(m.text);
+      });
+      setStatus(ev.status);
+      break;
+    case "status": setStatus(ev.value); break;
+    case "user": addUser(ev.text, ev.confident); break;
+    case "assistant_start": startAssistant(); break;
+    case "assistant_sentence": appendAssistant(ev.text); break;
+    case "assistant_done": currentAssistant = null; break;
+    case "clear": clearChat(); break;
+    case "log": console.log("[server]", ev.text); break;
+  }
+};
+es.onerror = () => { pillText.textContent = "Reconnecting…"; };
+
+// ---- controls ----
+function post(action) { return fetch("/control/" + action, { method: "POST" }); }
+startBtn.onclick = () => post("start");
+pauseBtn.onclick = () => post("pause");
+clearBtn.onclick = () => post("clear");
+
+// ---- settings ----
+const vad = document.getElementById("vad"), vadVal = document.getElementById("vadVal");
+const sil = document.getElementById("sil"), silVal = document.getElementById("silVal");
+
+function pushSettings() {
+  fetch("/settings", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vad_threshold: parseFloat(vad.value), trailing_silence_ms: parseInt(sil.value) }),
+  });
+}
+vad.oninput = () => { vadVal.textContent = parseFloat(vad.value).toFixed(2); };
+vad.onchange = pushSettings;
+sil.oninput = () => { silVal.textContent = sil.value + " ms"; };
+sil.onchange = pushSettings;
+
+fetch("/settings").then(r => r.json()).then(s => {
+  vad.value = s.vad_threshold; vadVal.textContent = (+s.vad_threshold).toFixed(2);
+  sil.value = s.trailing_silence_ms; silVal.textContent = s.trailing_silence_ms + " ms";
+  document.getElementById("iModel").textContent = s.whisper_model;
+  document.getElementById("iDevice").textContent = s.whisper_device;
+  document.getElementById("iCompute").textContent = s.whisper_compute;
+  document.getElementById("iLlm").textContent = s.llm_mode === "mock" ? "mock (local)" : "company API";
+});
+</script>
+</body>
+</html>

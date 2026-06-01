@@ -1,0 +1,11 @@
+# Secrets / local config — never commit the real endpoint URL or key.
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Captured audio scratch files
+utterance.wav

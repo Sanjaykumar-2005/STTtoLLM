@@ -1,0 +1,15 @@
+# STT -> LLM voice chatbot (this stage). TTS (Kokoro) deps come later.
+
+faster-whisper       # CTranslate2 Whisper backend (~4x faster than openai-whisper)
+silero-vad           # voice-activity detection for mic endpointing
+sounddevice          # microphone capture (needs a PortAudio backend)
+numpy                # audio buffers
+requests             # real company API client only (mock needs no network)
+flask                # web_ui.py browser front-end (terminal main.py needs no web deps)
+
+# torch: needed by Silero VAD and faster-whisper. For GPU (RTX 3050), install the
+# CUDA build, NOT the default CPU wheel, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+# Plain `pip install torch` gives the CPU-only build — fine for testing, but then
+# set WHISPER_DEVICE="cpu" in config.py.
+torch
