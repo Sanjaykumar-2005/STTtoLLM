@@ -194,6 +194,33 @@ LLM_TEMPERATURE = 0.7
 LLM_FALLBACK_LINE = "Sorry, I didn't catch that. Could you say it again?"
 
 # ======================================================================
+# Google Gemini client settings (used by GeminiLLMClient)
+# ======================================================================
+# Gemini's REST API is shaped differently from OpenAI/APIM (contents+parts, the
+# assistant is the "model" role, system text goes in systemInstruction, the key is
+# the x-goog-api-key header). GeminiLLMClient in llm.py handles all of that; these
+# are its knobs. The generic LLM_MAX_TOKENS / LLM_TEMPERATURE / timeouts / history /
+# SYSTEM_PROMPT above are reused.
+
+GEMINI_API_BASE_URL = os.environ.get(
+    "GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+# API key from the environment / .env, never hard-coded. Get one from Google AI Studio.
+#   PowerShell:  $env:GEMINI_API_KEY = "..."   (or put it in .env)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+# SSE streaming (:streamGenerateContent?alt=sse). Gemini supports it well, so it's on
+# by default for lower perceived latency. Set False to make one full call instead.
+GEMINI_STREAM = True
+
+# gemini-2.5-flash is a THINKING model. With a small maxOutputTokens, the thinking
+# phase can consume the whole budget and return EMPTY text. 0 disables thinking for
+# fast, short voice replies (recommended here). Set None to omit the field (model
+# default / dynamic thinking), or a positive int for an explicit thinking budget.
+GEMINI_THINKING_BUDGET = 0
+
+# ======================================================================
 # Conversation state (owned locally; assume the API is stateless)
 # ======================================================================
 

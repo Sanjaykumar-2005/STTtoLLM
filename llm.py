@@ -260,11 +260,139 @@ class CompanyLLMClient(BaseLLMClient):
 
 
 # ======================================================================
+# Google Gemini client — gemini-2.5-flash via the Generative Language API.
+# ======================================================================
+
+class GeminiLLMClient(BaseLLMClient):
+    """
+    Google Gemini client. Same respond() sentence-stream contract as the others,
+    but Gemini's REST shape is different from OpenAI/APIM:
+      * messages live in `contents`, each {role, parts:[{text}]},
+      * the assistant role is "model" (not "assistant"),
+      * the system prompt goes in a top-level `systemInstruction`,
+      * the key is the `x-goog-api-key` header,
+      * the reply text is candidates[0].content.parts[*].text,
+      * max_tokens/temperature live under `generationConfig`.
+    Streaming uses `:streamGenerateContent?alt=sse`; both paths reuse stream_sentences.
+    """
+
+    def respond(self, user_text: str):
+        if requests is None:
+            print("[llm] 'requests' is not installed; cannot reach the Gemini API.")
+            yield config.LLM_FALLBACK_LINE
+            return
+
+        if not config.GEMINI_API_KEY:
+            print("[llm] GEMINI_API_KEY is not set. Put it in a .env file (copy "
+                  ".env.example) or export it as an environment variable.")
+            yield config.LLM_FALLBACK_LINE
+            return
+
+        contents = self._build_contents(user_text)
+        collected = []
+        try:
+            for sentence in stream_sentences(self._stream_deltas(contents)):
+                collected.append(sentence)
+                yield sentence
+        except Exception as e:
+            print(f"[llm] Gemini request failed: {e}")
+            if not collected:
+                yield config.LLM_FALLBACK_LINE
+            return  # don't store a failed/partial turn in history
+
+        reply = " ".join(collected).strip()
+        if not reply:
+            yield config.LLM_FALLBACK_LINE
+            return
+        self._remember(user_text, reply)
+
+    def _build_contents(self, user_text: str) -> list[dict]:
+        """history (last N turns) + new user turn, mapped to Gemini's contents shape."""
+        keep = config.HISTORY_MAX_TURNS * 2
+        contents = []
+        for msg in self.history[-keep:]:
+            role = "model" if msg["role"] == "assistant" else "user"
+            contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+        contents.append({"role": "user", "parts": [{"text": user_text}]})
+        return contents
+
+    def _stream_deltas(self, contents: list[dict]):
+        """Yield text deltas from Gemini (one big delta when not streaming)."""
+        base = config.GEMINI_API_BASE_URL.rstrip("/")
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": config.GEMINI_API_KEY,
+        }
+        timeout = (config.LLM_CONNECT_TIMEOUT, config.LLM_READ_TIMEOUT)
+        body = self._body(contents)
+
+        if config.GEMINI_STREAM:
+            url = f"{base}/models/{config.GEMINI_MODEL}:streamGenerateContent"
+            with requests.post(
+                url, headers=headers, params={"alt": "sse"},
+                json=body, stream=True, timeout=timeout,
+            ) as resp:
+                resp.raise_for_status()
+                for raw in resp.iter_lines(decode_unicode=False):
+                    if not raw:
+                        continue
+                    delta = self._parse_stream_line(raw)
+                    if delta:
+                        yield delta
+        else:
+            url = f"{base}/models/{config.GEMINI_MODEL}:generateContent"
+            resp = requests.post(url, headers=headers, json=body, timeout=timeout)
+            resp.raise_for_status()
+            text = self._extract_text(resp.json())
+            if text:
+                yield text
+
+    def _body(self, contents: list[dict]) -> dict:
+        """Gemini request body: contents + systemInstruction + generationConfig."""
+        gen_config = {"maxOutputTokens": config.LLM_MAX_TOKENS}
+        if config.LLM_TEMPERATURE is not None:
+            gen_config["temperature"] = config.LLM_TEMPERATURE
+        if config.GEMINI_THINKING_BUDGET is not None:
+            gen_config["thinkingConfig"] = {"thinkingBudget": config.GEMINI_THINKING_BUDGET}
+        return {
+            "contents": contents,
+            "systemInstruction": {"parts": [{"text": config.SYSTEM_PROMPT}]},
+            "generationConfig": gen_config,
+        }
+
+    def _parse_stream_line(self, raw: bytes):
+        """Pull text out of ONE SSE line (`data: {json}`). None for non-content lines."""
+        try:
+            line = raw.decode("utf-8").strip()
+        except Exception:
+            return None
+        if not line.startswith("data:"):
+            return None
+        payload = line[len("data:"):].strip()
+        if not payload or payload == "[DONE]":
+            return None
+        try:
+            return self._extract_text(json.loads(payload))
+        except Exception:
+            return None
+
+    def _extract_text(self, obj: dict):
+        """Concatenate the text parts of the first candidate. None if there are none."""
+        try:
+            parts = obj["candidates"][0]["content"]["parts"]
+            text = "".join(p.get("text", "") for p in parts)
+            return text or None
+        except Exception:
+            return None
+
+
+# ======================================================================
 # THE ONE-LINE SWAP
 # ----------------------------------------------------------------------
-# main.py imports `LLMClient` from here. Today it points at the mock. When the
-# company API is available, change the right-hand side to CompanyLLMClient (and
-# set the URL/key/model in config.py or via env vars). Nothing else changes.
+# main.py / web_ui.py import `LLMClient` from here. Flip the active line below to
+# choose a client; set the matching keys/URL in config.py or via .env. Nothing
+# else changes — all three clients share the respond() sentence-stream contract.
 # ======================================================================
-# LLMClient = MockLLMClient       # <-- flip back for offline / no-key testing
-LLMClient = CompanyLLMClient      # LIVE: real Qwen-32B via the Azure APIM gateway
+# LLMClient = MockLLMClient       # offline / no-key testing (echoes the transcript)
+# LLMClient = CompanyLLMClient    # Qwen-32B via the Azure APIM gateway
+LLMClient = GeminiLLMClient       # LIVE: gemini-2.5-flash (Generative Language API)

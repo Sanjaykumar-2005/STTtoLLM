@@ -253,7 +253,8 @@ fetch("/settings").then(r => r.json()).then(s => {
   document.getElementById("iModel").textContent = s.whisper_model;
   document.getElementById("iDevice").textContent = s.whisper_device;
   document.getElementById("iCompute").textContent = s.whisper_compute;
-  document.getElementById("iLlm").textContent = s.llm_mode === "mock" ? "mock (local)" : "company API";
+  document.getElementById("iLlm").textContent =
+    ({ mock: "mock (local)", gemini: "Gemini 2.5 Flash", company: "company API" })[s.llm_mode] || s.llm_mode;
 });
 </script>
 </body>

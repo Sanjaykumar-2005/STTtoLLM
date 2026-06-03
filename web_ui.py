@@ -199,7 +199,9 @@ def current_settings() -> dict:
         "whisper_model": config.WHISPER_MODEL_SIZE,
         "whisper_device": config.WHISPER_DEVICE,
         "whisper_compute": config.WHISPER_COMPUTE_TYPE,
-        "llm_mode": "mock" if LLMClient is llm.MockLLMClient else "company",
+        "llm_mode": ("mock" if LLMClient is llm.MockLLMClient
+                     else "gemini" if LLMClient is llm.GeminiLLMClient
+                     else "company"),
     }
 
 
